@@ -1,17 +1,38 @@
 # 🎲 Android Intent Fuzzer
 
-Discover hidden Android activities, broadcast receivers, and services via Intent fuzzing.
+Node.js tool to fuzz Android Intents — discover hidden activities and crash vulnerabilities.
 
-## What it does
-
-- Enumerate all exported components
-- Fuzz with random Intent data/extras
-- Detect crashes and unhandled exceptions
-- Log accessible services
+## Install
+```bash
+npm install
+chmod +x fuzz.js
+```
 
 ## Usage
-
 ```bash
-python3 fuzz.py --package com.example.app --count 100
-python3 fuzz.py --broadcast  # fuzz all broadcast receivers
+node fuzz.js com.example.app
+node fuzz.js com.example.app --actions 100 --depth 3
 ```
+
+## What it does
+- Discovers exposed activities in the APK's manifest
+- Generates random Intent combos with:
+  - Common actions (VIEW, SEND, EDIT, etc.)
+  - Optional categories
+  - Optional data URIs
+- Tests each Intent; logs crashes
+
+## Output
+```
+🎲 Intent Fuzzer — com.example.app
+Actions: 20, Depth: 2
+
+Found 5 activities
+
+[1/20] ACTION_VIEW ✓
+[2/20] ACTION_SEND ·
+...
+✅ Tested: 20 | Found: 3 | Crashed: 1
+```
+
+Great for security research and app hardening.
