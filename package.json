@@ -1,0 +1,9 @@
+{
+  "name": "android-intent-fuzzer",
+  "version": "0.1.0",
+  "description": "Fuzz Android Intents to discover hidden activities",
+  "main": "fuzz.js",
+  "bin": { "adb-fuzz": "fuzz.js" },
+  "keywords": ["android", "adb", "fuzzing", "intents", "security"],
+  "author": "OutrageousStorm"
+}
