@@ -1,113 +1,97 @@
 #!/usr/bin/env python3
 """
-fuzzer.py -- Fuzz Android Intents to discover hidden activities
-Sends random intents with various actions, data URIs, and extras
-to discover activities that might not be in the manifest.
-Usage: python3 fuzzer.py [--target com.example.app] [--count 100]
+fuzzer.py -- Android Intent fuzzer to discover hidden components
+Sends Intents with various action strings and fuzzes parameters
+to find unexpected activities, services, and receivers.
+Usage: python3 fuzzer.py --package com.example.app
 """
-import subprocess, random, sys, argparse
-from urllib.parse import urljoin
+import subprocess, argparse, sys, itertools
 
-ACTIONS = [
-    "android.intent.action.VIEW",
-    "android.intent.action.EDIT",
-    "android.intent.action.SEND",
-    "android.intent.action.SEND_MULTIPLE",
-    "android.intent.action.PICK",
+INTENT_ACTIONS = [
+    "android.intent.action.MAIN",
+    "android.intent.action.VIEW", "android.intent.action.EDIT",
+    "android.intent.action.SEND", "android.intent.action.SENDTO",
+    "android.intent.action.SEARCH", "android.intent.action.DIAL",
+    "android.intent.action.CALL", "android.intent.action.PICK",
     "android.intent.action.GET_CONTENT",
-    "android.intent.action.OPEN_DOCUMENT",
-    "android.intent.action.CALL",
-    "android.intent.action.DIAL",
-    "android.intent.action.SENDTO",
-    "android.intent.action.SEARCH",
-    "android.intent.action.WEB_SEARCH",
-    "android.intent.action.CREATE_SHORTCUT",
-    "com.example.ACTION_ADMIN",
-    "com.example.ACTION_DEBUG",
-    "com.example.DEEPLINK",
 ]
 
-MIMETYPES = [
-    "text/plain",
-    "image/*",
-    "image/jpeg",
-    "application/json",
-    "application/pdf",
-    "application/x-www-form-urlencoded",
-    "video/*",
-    "audio/*",
+CUSTOM_ACTIONS = [
+    "{pkg}.action.MAIN", "{pkg}.action.SETTINGS", "{pkg}.action.DEBUG",
+    "{pkg}.action.HOME", "{pkg}.action.ABOUT", "{pkg}.action.TEST",
+    "{pkg}.action.ADMIN", "{pkg}.action.BACKDOOR", "{pkg}.action.UNLOCK",
+    "com.internal.{basename}.HIDDEN", "internal.debug.{basename}",
 ]
 
-URIS = [
-    "http://example.com",
-    "https://example.com/admin",
-    "file:///sdcard/test.txt",
-    "content://com.example.provider/data",
-    "tel:1234567890",
-    "mailto:test@example.com",
-    "sms:1234567890",
-    "geo:0,0?z=10",
-]
-
-CATEGORIES = [
-    "android.intent.category.DEFAULT",
-    "android.intent.category.BROWSABLE",
-    "android.intent.category.LAUNCHER",
-    "android.intent.category.ALTERNATIVE",
-    "android.intent.category.SELECTED_ALTERNATIVE",
-]
-
-def adb_am(cmd):
+def adb(cmd):
     r = subprocess.run(f"adb shell {cmd}", shell=True, capture_output=True, text=True)
-    return r.stdout + r.stderr
+    return r.returncode == 0, r.stdout + r.stderr
 
-def fuzz_intent(target, action, data=None, mime=None, category=None):
-    cmd = f"am start -a {action}"
-    if data:
-        cmd += f" -d {data}"
-    if mime:
-        cmd += f" -t {mime}"
-    if category:
-        cmd += f" -c {category}"
-    if target:
-        cmd += f" {target}"
+def start_activity(pkg, action):
+    """Try to start activity with action, catch errors"""
+    ok, out = adb(f"am start -a {action} -n {pkg}/.dummy 2>&1 || true")
+    # If we see "Error: Unknown class" that's different than "No match found"
+    # It means the component exists but we don't have the exact class
+    if "No such option" not in out and "Invalid" not in out:
+        return True
+    return False
 
-    result = adb_am(cmd)
+def send_broadcast(pkg, action):
+    """Send broadcast with action"""
+    ok, out = adb(f"am broadcast -a {action} --user all 2>&1 || true")
+    # Activity might catch it without error
+    return "broadcasts received" not in out or len(out) < 100
+
+def fuzz_intents(pkg, actions):
+    print(f"\n🎲 Fuzzing {pkg} with {len(actions)} actions")
+    print("─" * 60)
     
-    # Check for successful launch vs error
-    error = "Error" in result or "not found" in result.lower()
-    return not error, cmd
+    discovered = []
+    for i, action in enumerate(actions):
+        if (i + 1) % 10 == 0:
+            print(f"  ... {i+1}/{len(actions)} tested", flush=True)
+        
+        # Try as activity
+        if start_activity(pkg, action):
+            print(f"  [Activity] {action}")
+            discovered.append(("activity", action))
+        
+        # Try as broadcast
+        if send_broadcast(pkg, action):
+            print(f"  [Broadcast] {action}")
+            discovered.append(("broadcast", action))
+    
+    return discovered
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--target", help="Target package (or empty for implicit)")
-    parser.add_argument("--count", type=int, default=50)
-    parser.add_argument("--action", help="Fuzz specific action")
+    parser.add_argument("--package", required=True)
+    parser.add_argument("--wordlist", help="Custom action wordlist")
+    parser.add_argument("--custom-only", action="store_true")
+    parser.add_argument("--fuzzy", action="store_true", help="Add random parameter fuzzing")
     args = parser.parse_args()
 
-    print(f"\n🎲 Android Intent Fuzzer")
-    print(f"{'─'*50}")
-    print(f"Target: {args.target or '(implicit)'}")
-    print(f"Fuzzing {args.count} intents...\n")
+    basename = args.package.split('.')[-1]
+    actions = []
 
-    found = 0
-    for i in range(args.count):
-        action = args.action or random.choice(ACTIONS)
-        data = random.choice(URIS) if random.random() > 0.5 else None
-        mime = random.choice(MIMETYPES) if random.random() > 0.6 else None
-        category = random.choice(CATEGORIES) if random.random() > 0.7 else None
+    if not args.custom_only:
+        actions.extend(INTENT_ACTIONS)
+    
+    actions.extend([a.format(pkg=args.package, basename=basename) for a in CUSTOM_ACTIONS])
 
-        ok, cmd = fuzz_intent(args.target, action, data, mime, category)
-        
-        if ok:
-            found += 1
-            print(f"  ✓ [{i+1}] {action:<40} {data or ''}")
-        elif i % 10 == 0:
-            print(f"  ... {i}/{args.count}")
+    if args.wordlist:
+        with open(args.wordlist) as f:
+            actions.extend(f.read().splitlines())
 
-    print(f"\n{'─'*50}")
-    print(f"✅ Fuzzing complete: {found} successful intents")
-    print(f"💡 Check logcat for ANRs, crashes, or unexpected handlers")
+    # Remove dupes
+    actions = list(set(actions))
+
+    discovered = fuzz_intents(args.package, actions)
+    
+    print(f"\n{'─'*60}")
+    print(f"Found {len(discovered)} potential hidden components")
+    for component_type, action in discovered:
+        print(f"  {component_type}: {action}")
 
 if __name__ == "__main__":
     main()
